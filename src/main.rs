@@ -25,7 +25,10 @@ use tantivy::{
 #[clap(subcommand_negates_reqs(true))]
 struct Args {
     #[clap(required = true)]
-    query: Option<String>,
+    query: Vec<String>,
+
+    #[clap(short, long)]
+    open: bool,
 
     /// index name
     ///
@@ -42,6 +45,20 @@ struct Args {
 }
 
 impl Args {
+    fn query_string(&self) -> String {
+        if self.query.is_empty() {
+            return String::new();
+        }
+
+        let mut buf = String::from(&self.query[0]);
+        for part in &self.query[1..] {
+            buf += " ";
+            buf += part;
+        }
+
+        buf
+    }
+
     fn skip_take(&self) -> (Skip, Take) {
         (
             self.skip_take.skip.unwrap_or_default().into(),
@@ -146,15 +163,15 @@ struct Libraries {
 
 impl Libraries {
     fn from_path(path: &Path) -> io::Result<Libraries> {
-        if !path.exists() {
-            return Ok(Default::default());
-        }
-
-        let path = if !path.ends_with("libraries.json") {
+        let path = if path.ends_with("libraries.json") {
             Cow::from(path)
         } else {
             Cow::from(path.join("libraries.json"))
         };
+
+        if !path.exists() {
+            return Ok(Default::default());
+        }
 
         let text = fs::read_to_string(path)?;
         Ok(serde_json::from_str(&text)?)
@@ -204,15 +221,23 @@ fn run(args: &Args) -> anyhow::Result<()> {
     let reader = index.reader()?;
     let searcher = reader.searcher();
     let parser = QueryParser::for_index(&index, vec![fields.text]);
-    let query = parser.parse_query(args.query.as_ref().expect("unreachable"))?;
+    let query = parser.parse_query(&args.query_string())?;
 
     let (skip, take) = args.skip_take();
     let texts = searcher.search(&query, &TopDocs::with_limit(*take).and_offset(*skip))?;
 
-    for (_score, doc) in texts {
-        let text = searcher.doc(doc)?;
-        let path = text.get_first(fields.path).unwrap().as_text().unwrap();
-        println!("{path}");
+    if args.open {
+        for (_score, doc) in texts {
+            let text = searcher.doc(doc)?;
+            let path = text.get_first(fields.path).unwrap().as_text().unwrap();
+            open::that(path)?;
+        }
+    } else {
+        for (_score, doc) in texts {
+            let text = searcher.doc(doc)?;
+            let path = text.get_first(fields.path).unwrap().as_text().unwrap();
+            println!("{path}");
+        }
     }
 
     Ok(())
@@ -257,6 +282,8 @@ fn build_index(args: &IndexArgs) -> anyhow::Result<()> {
             fields.text => text,
         })?;
     }
+
+    writer.commit()?;
 
     // Registration starts here. The first thing we need to concern ourselves about is whether or
     // not a library with the given name is already registered. If so, we'll either return here
