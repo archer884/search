@@ -62,7 +62,10 @@ impl Args {
     fn skip_take(&self) -> (Skip, Take) {
         (
             self.skip_take.skip.unwrap_or_default().into(),
-            self.skip_take.skip.unwrap_or(50).into(),
+            self.skip_take
+                .skip
+                .unwrap_or(if self.open { 10 } else { 50 })
+                .into(),
         )
     }
 }
