@@ -311,7 +311,7 @@ fn initialize(
     storage_path: &PathBuf,
     root: &PathBuf,
 ) -> Result<(), anyhow::Error> {
-    static MEMORY: usize = 0x6400000; // 100 megs?
+    static MEMORY: usize = 0xC800000; // 100 megs?
     static BATCH_SIZE: usize = 20_000;
 
     let data_path = get_data_path(args, storage_path)?;
@@ -330,6 +330,11 @@ fn initialize(
         let data = fs::read(&path)?;
         let text = String::from_utf8_lossy(&data);
         let path = format!("{}", path.display());
+
+        // FIXME: It would behoove us to limit indexing to only that portion of each file which
+        // comprises the readable text of the file, because I have noticed a tendency for files
+        // with less markup to be ranked higher than files containing the same content with more
+        // markup.
 
         writer.add_document(doc! {
             fields.path => path,
