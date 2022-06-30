@@ -313,26 +313,32 @@ fn initialize(
 ) -> Result<(), anyhow::Error> {
     static MEGABYTES_50: usize = 0x3200000;
     static BATCH_SIZE: usize = 5000;
+
     let data_path = get_data_path(args, storage_path)?;
     let (schema, fields) = build_schema();
     let index = Index::create_in_dir(&data_path, schema)?;
+
     let mut writer = index.writer(MEGABYTES_50)?;
     let mut count = 0;
+
     for path in read_paths(root) {
         count += 1;
         if count % BATCH_SIZE == 0 {
             writer.commit()?;
         }
 
-        let text = fs::read_to_string(&path)?;
+        let data = fs::read(&path)?;
+        let text = String::from_utf8_lossy(&data);
         let path = format!("{}", path.display());
 
         writer.add_document(doc! {
             fields.path => path,
-            fields.text => text,
+            fields.text => text.to_string(),
         })?;
     }
+
     writer.commit()?;
+
     Ok(())
 }
 
