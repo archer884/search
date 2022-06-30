@@ -63,7 +63,7 @@ impl Args {
         (
             self.skip_take.skip.unwrap_or_default().into(),
             self.skip_take
-                .skip
+                .take
                 .unwrap_or(if self.open { 10 } else { 50 })
                 .into(),
         )
@@ -228,17 +228,21 @@ fn run(args: &Args) -> anyhow::Result<()> {
 
     let (skip, take) = args.skip_take();
     let texts = searcher.search(&query, &TopDocs::with_limit(*take).and_offset(*skip))?;
+    let texts = texts.into_iter().filter_map(|(_, doc_id)| {
+        searcher
+            .doc(doc_id)
+            .ok()?
+            .get_first(fields.path)?
+            .as_text()
+            .map(ToOwned::to_owned)
+    });
 
     if args.open {
-        for (_score, doc) in texts {
-            let text = searcher.doc(doc)?;
-            let path = text.get_first(fields.path).unwrap().as_text().unwrap();
+        for path in texts {
             open::that(path)?;
         }
     } else {
-        for (_score, doc) in texts {
-            let text = searcher.doc(doc)?;
-            let path = text.get_first(fields.path).unwrap().as_text().unwrap();
+        for path in texts {
             println!("{path}");
         }
     }
@@ -259,41 +263,28 @@ fn build_index(args: &IndexArgs) -> anyhow::Result<()> {
     // there is no point in registering a library for an index that we failed to build to begin
     // with.
 
-    static MEGABYTES_50: usize = 0x3200000;
-    static BATCH_SIZE: usize = 5000;
-
     let root = args.get_root()?;
     let storage_path = get_storage_path()?;
-    let data_path = get_data_path(args, &storage_path)?;
-    let (schema, fields) = build_schema();
-    let index = Index::create_in_dir(&data_path, schema)?;
 
-    let mut writer = index.writer(MEGABYTES_50)?;
-    let mut count = 0;
-
-    for path in read_paths(&root) {
-        count += 1;
-        if count % BATCH_SIZE == 0 {
-            writer.commit()?;
-        }
-
-        let text = fs::read_to_string(&path)?;
-        let path = format!("{}", path.display());
-
-        writer.add_document(doc! {
-            fields.path => path,
-            fields.text => text,
-        })?;
-    }
-
-    writer.commit()?;
+    initialize(args, &storage_path, &root)?;
 
     // Registration starts here. The first thing we need to concern ourselves about is whether or
     // not a library with the given name is already registered. If so, we'll either return here
     // or continue depending on whether or not the force flag has been set.
 
+    update_registry(storage_path, args, root)?;
+
+    Ok(())
+}
+
+fn update_registry(
+    storage_path: PathBuf,
+    args: &IndexArgs,
+    root: PathBuf,
+) -> Result<(), anyhow::Error> {
     let registry = storage_path.join("libraries.json");
     let libraries = Libraries::from_path(&storage_path)?;
+
     if libraries.mapping.values().any(|val| val == &args.name) && !args.force {
         let name = &args.name;
         return Err(io::Error::new(
@@ -309,9 +300,39 @@ fn build_index(args: &IndexArgs) -> anyhow::Result<()> {
         .filter(|(_key, value)| value != &args.name)
         .collect();
     mapping.insert(root, args.name.clone());
+
     let libraries = Libraries { mapping };
     serde_json::to_writer_pretty(&mut File::create(&registry)?, &libraries)?;
+    Ok(())
+}
 
+fn initialize(
+    args: &IndexArgs,
+    storage_path: &PathBuf,
+    root: &PathBuf,
+) -> Result<(), anyhow::Error> {
+    static MEGABYTES_50: usize = 0x3200000;
+    static BATCH_SIZE: usize = 5000;
+    let data_path = get_data_path(args, storage_path)?;
+    let (schema, fields) = build_schema();
+    let index = Index::create_in_dir(&data_path, schema)?;
+    let mut writer = index.writer(MEGABYTES_50)?;
+    let mut count = 0;
+    for path in read_paths(root) {
+        count += 1;
+        if count % BATCH_SIZE == 0 {
+            writer.commit()?;
+        }
+
+        let text = fs::read_to_string(&path)?;
+        let path = format!("{}", path.display());
+
+        writer.add_document(doc! {
+            fields.path => path,
+            fields.text => text,
+        })?;
+    }
+    writer.commit()?;
     Ok(())
 }
 
