@@ -311,14 +311,14 @@ fn initialize(
     storage_path: &PathBuf,
     root: &PathBuf,
 ) -> Result<(), anyhow::Error> {
-    static MEGABYTES_50: usize = 0x3200000;
-    static BATCH_SIZE: usize = 5000;
+    static MEMORY: usize = 0x6400000; // 100 megs?
+    static BATCH_SIZE: usize = 20_000;
 
     let data_path = get_data_path(args, storage_path)?;
     let (schema, fields) = build_schema();
     let index = Index::create_in_dir(&data_path, schema)?;
 
-    let mut writer = index.writer(MEGABYTES_50)?;
+    let mut writer = index.writer(MEMORY)?;
     let mut count = 0;
 
     for path in read_paths(root) {
@@ -351,7 +351,7 @@ fn read_paths(root: &Path) -> impl Iterator<Item = PathBuf> {
         let path = entry.path();
         let extension = path.extension()?;
 
-        if EXTENSIONS
+        if path.is_file() && EXTENSIONS
             .iter()
             .copied()
             .any(|ext| OsStr::new(ext) == extension)
