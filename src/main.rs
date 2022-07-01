@@ -11,6 +11,7 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
+use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use tantivy::{
     collector::TopDocs,
@@ -306,11 +307,7 @@ fn update_registry(
     Ok(())
 }
 
-fn initialize(
-    args: &IndexArgs,
-    storage_path: &PathBuf,
-    root: &PathBuf,
-) -> Result<(), anyhow::Error> {
+fn initialize(args: &IndexArgs, storage_path: &Path, root: &Path) -> Result<(), anyhow::Error> {
     static MEMORY: usize = 0xC800000; // 100 megs?
     static BATCH_SIZE: usize = 20_000;
 
@@ -321,6 +318,8 @@ fn initialize(
     let mut writer = index.writer(MEMORY)?;
     let mut count = 0;
 
+    let selector = Selector::parse("body").unwrap();
+
     for path in read_paths(root) {
         count += 1;
         if count % BATCH_SIZE == 0 {
@@ -329,16 +328,26 @@ fn initialize(
 
         let data = fs::read(&path)?;
         let text = String::from_utf8_lossy(&data);
-        let path = format!("{}", path.display());
+        let stored_path = format!("{}", path.display());
 
-        // FIXME: It would behoove us to limit indexing to only that portion of each file which
-        // comprises the readable text of the file, because I have noticed a tendency for files
-        // with less markup to be ranked higher than files containing the same content with more
-        // markup.
+        let text = if is_html(&path) {
+            let fragment = Html::parse_fragment(&*text);
+            let mut text = fragment.select(&selector).flat_map(|elem| elem.text());
+            let mut buf = String::from(text.next().unwrap_or("").trim());
+
+            for s in text {
+                buf += " ";
+                buf += s.trim();
+            }
+
+            buf
+        } else {
+            text.to_string()
+        };
 
         writer.add_document(doc! {
-            fields.path => path,
-            fields.text => text.to_string(),
+            fields.path => stored_path,
+            fields.text => text,
         })?;
     }
 
@@ -356,10 +365,11 @@ fn read_paths(root: &Path) -> impl Iterator<Item = PathBuf> {
         let path = entry.path();
         let extension = path.extension()?;
 
-        if path.is_file() && EXTENSIONS
-            .iter()
-            .copied()
-            .any(|ext| OsStr::new(ext) == extension)
+        if path.is_file()
+            && EXTENSIONS
+                .iter()
+                .copied()
+                .any(|ext| OsStr::new(ext) == extension)
         {
             Some(path.into())
         } else {
@@ -407,4 +417,12 @@ fn get_storage_path() -> io::Result<PathBuf> {
     })?;
 
     Ok(dirs.data_dir().into())
+}
+
+fn is_html(path: &Path) -> bool {
+    static EXTENSIONS: &[&str] = &["htm", "html"];
+
+    path.extension()
+        .map(|a| EXTENSIONS.iter().copied().any(|b| a == b))
+        .unwrap_or_default()
 }
