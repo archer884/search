@@ -11,7 +11,7 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
-use scraper::{Html, Selector};
+use scraper::Html;
 use serde::{Deserialize, Serialize};
 use tantivy::{
     collector::TopDocs,
@@ -23,7 +23,7 @@ use tantivy::{
 };
 
 #[derive(Clone, Debug, Parser)]
-#[clap(subcommand_negates_reqs(true))]
+#[clap(version, subcommand_negates_reqs(true))]
 struct Args {
     #[clap(required = true)]
     query: Vec<String>,
@@ -318,8 +318,6 @@ fn initialize(args: &IndexArgs, storage_path: &Path, root: &Path) -> Result<(), 
     let mut writer = index.writer(MEMORY)?;
     let mut count = 0;
 
-    let selector = Selector::parse("body").unwrap();
-
     for path in read_paths(root) {
         count += 1;
         if count % BATCH_SIZE == 0 {
@@ -332,10 +330,9 @@ fn initialize(args: &IndexArgs, storage_path: &Path, root: &Path) -> Result<(), 
 
         let text = if is_html(&path) {
             let fragment = Html::parse_fragment(&*text);
-            let mut text = fragment.select(&selector).flat_map(|elem| elem.text());
-            let mut buf = String::from(text.next().unwrap_or("").trim());
 
-            for s in text {
+            let mut buf = String::with_capacity(text.len());
+            for s in fragment.root_element().text() {
                 buf += " ";
                 buf += s.trim();
             }
