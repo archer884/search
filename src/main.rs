@@ -7,6 +7,8 @@ use std::{
     io,
     ops::Deref,
     path::{Path, PathBuf},
+    thread,
+    time::Duration,
 };
 
 use clap::{Parser, Subcommand};
@@ -107,11 +109,25 @@ impl Deref for Take {
 enum Command {
     /// create a new index
     #[clap(alias = "ci")]
-    CreateIndex(IndexArgs),
+    CreateIndex(IndexCmd),
+
+    /// list indexes
+    #[clap(alias = "ls")]
+    ListIndexes,
+
+    /// update index
+    #[clap(alias = "u")]
+    Update,
+}
+
+trait IndexArgs {
+    fn name(&self) -> &str;
+    fn root(&self) -> io::Result<Cow<Path>>;
+    fn force(&self) -> bool;
 }
 
 #[derive(Clone, Debug, Parser)]
-struct IndexArgs {
+struct IndexCmd {
     /// library name
     ///
     /// Each search library needs a name so that we have a place to store the index.
@@ -130,12 +146,39 @@ struct IndexArgs {
     force: bool,
 }
 
-impl IndexArgs {
-    fn get_root(&self) -> io::Result<PathBuf> {
+impl IndexArgs for IndexCmd {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn root(&self) -> io::Result<Cow<Path>> {
         match self.root.as_deref() {
-            Some(path) => Ok(path.into()),
-            None => env::current_dir(),
+            Some(path) => Ok(Cow::from(Path::new(path))),
+            None => env::current_dir().map(Cow::from),
         }
+    }
+
+    fn force(&self) -> bool {
+        self.force
+    }
+}
+
+struct UpdateCmd<'a> {
+    name: &'a str,
+    root: &'a Path,
+}
+
+impl IndexArgs for UpdateCmd<'_> {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn root(&self) -> io::Result<Cow<Path>> {
+        Ok(self.root.into())
+    }
+
+    fn force(&self) -> bool {
+        true
     }
 }
 
@@ -181,19 +224,15 @@ impl Libraries {
         Ok(serde_json::from_str(&text)?)
     }
 
-    fn get_index_name<'a>(&'a self, args: &'a Args) -> io::Result<&'a str> {
-        if let Some(name) = &args.index {
-            return Ok(name);
-        }
-
-        let dir = env::current_dir()?;
+    // fn get_index_name<'a>(&'a self, args: &'a Args) -> io::Result<&'a str> {
+    fn get_index_name<'a>(&'a self, path: &Path) -> io::Result<&'a str> {
         Ok(self
             .mapping
-            .get(&dir)
+            .get(path)
             .ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!("no library for {}", dir.display()),
+                    format!("no library for {}", path.display()),
                 )
             })?
             .as_ref())
@@ -218,9 +257,12 @@ fn run(args: &Args) -> anyhow::Result<()> {
 
     let storage_path = get_storage_path()?;
     let libraries = Libraries::from_path(&storage_path)?;
-    let name = libraries.get_index_name(args)?;
-    let (_schema, fields) = build_schema();
+    let name = match args.index.as_deref() {
+        Some(name) => name,
+        None => libraries.get_index_name(&env::current_dir()?)?,
+    };
 
+    let (_schema, fields) = build_schema();
     let index = Index::open(MmapDirectory::open(storage_path.join(name))?)?;
     let reader = index.reader()?;
     let searcher = reader.searcher();
@@ -239,7 +281,13 @@ fn run(args: &Args) -> anyhow::Result<()> {
     });
 
     if args.open {
+        let mut state = false;
         for path in texts {
+            if state {
+                thread::sleep(Duration::from_millis(500));
+            } else {
+                state = true;
+            }
             open::that(path)?;
         }
     } else {
@@ -254,17 +302,46 @@ fn run(args: &Args) -> anyhow::Result<()> {
 fn dispatch(command: &Command) -> anyhow::Result<()> {
     match command {
         Command::CreateIndex(args) => build_index(args),
+        Command::ListIndexes => list_indexes(),
+        Command::Update => update_index(),
+        // FIXME: add command for requesting the index for the current dir
     }
 }
 
-fn build_index(args: &IndexArgs) -> anyhow::Result<()> {
+fn update_index() -> anyhow::Result<()> {
+    let storage_path = get_storage_path()?;
+    let libraries = Libraries::from_path(&storage_path)?;
+    let root = env::current_dir()?;
+    let name = libraries.get_index_name(&root)?;
+
+    build_index(&UpdateCmd {
+        root: &root,
+        name: &name,
+    })
+}
+
+fn list_indexes() -> anyhow::Result<()> {
+    let storage_path = get_storage_path()?;
+    let libraries = Libraries::from_path(&storage_path)?;
+
+    let mut names: Vec<_> = libraries.mapping.values().collect();
+    names.sort();
+
+    for name in names {
+        println!("{name}");
+    }
+
+    Ok(())
+}
+
+fn build_index(args: &impl IndexArgs) -> anyhow::Result<()> {
     // To build our index is actually a two-step process. First, we actually need to register the
     // library in our library mappings, because we need some way to know which library we are
     // searching. Before that (so zerost, I guess) we need to actually create the index, beacuse
     // there is no point in registering a library for an index that we failed to build to begin
     // with.
 
-    let root = args.get_root()?;
+    let root = args.root()?;
     let storage_path = get_storage_path()?;
 
     initialize(args, &storage_path, &root)?;
@@ -273,21 +350,21 @@ fn build_index(args: &IndexArgs) -> anyhow::Result<()> {
     // not a library with the given name is already registered. If so, we'll either return here
     // or continue depending on whether or not the force flag has been set.
 
-    update_registry(storage_path, args, root)?;
+    update_registry(storage_path, args, &*root)?;
 
     Ok(())
 }
 
 fn update_registry(
     storage_path: PathBuf,
-    args: &IndexArgs,
-    root: PathBuf,
+    args: &impl IndexArgs,
+    root: &Path,
 ) -> Result<(), anyhow::Error> {
     let registry = storage_path.join("libraries.json");
     let libraries = Libraries::from_path(&storage_path)?;
 
-    if libraries.mapping.values().any(|val| val == &args.name) && !args.force {
-        let name = &args.name;
+    if libraries.mapping.values().any(|val| val == &args.name()) && !args.force() {
+        let name = args.name();
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             format!("library {name:?} is already registered"),
@@ -298,16 +375,20 @@ fn update_registry(
     let mut mapping: HashMap<_, _> = libraries
         .mapping
         .into_iter()
-        .filter(|(_key, value)| value != &args.name)
+        .filter(|(_key, value)| value != &args.name())
         .collect();
-    mapping.insert(root, args.name.clone());
+    mapping.insert(root.to_owned(), args.name().to_owned());
 
     let libraries = Libraries { mapping };
     serde_json::to_writer_pretty(&mut File::create(&registry)?, &libraries)?;
     Ok(())
 }
 
-fn initialize(args: &IndexArgs, storage_path: &Path, root: &Path) -> Result<(), anyhow::Error> {
+fn initialize(
+    args: &impl IndexArgs,
+    storage_path: &Path,
+    root: &Path,
+) -> Result<(), anyhow::Error> {
     static MEMORY: usize = 0xC800000; // 100 megs?
     static BATCH_SIZE: usize = 20_000;
 
@@ -385,12 +466,12 @@ fn build_schema() -> (Schema, SearchFields) {
     (builder.build(), fields)
 }
 
-fn get_data_path(args: &IndexArgs, storage: &Path) -> io::Result<PathBuf> {
-    let path = storage.join(&args.name);
+fn get_data_path(args: &impl IndexArgs, storage: &Path) -> io::Result<PathBuf> {
+    let path = storage.join(args.name());
     let meta = path.join("meta.json");
 
-    if meta.exists() && !args.force {
-        let name = &args.name;
+    if meta.exists() && !args.force() {
+        let name = &args.name();
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             format!("an index already exists for library {name:?}"),
