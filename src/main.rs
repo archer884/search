@@ -126,6 +126,8 @@ trait IndexArgs {
     fn force(&self) -> bool;
 }
 
+// FIXME: change IndexCmd to eliminate the error case so that we can simplify the trait
+
 #[derive(Clone, Debug, Parser)]
 struct IndexCmd {
     /// library name
