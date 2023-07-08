@@ -67,7 +67,7 @@ impl Args {
             self.skip_take.skip.unwrap_or_default().into(),
             self.skip_take
                 .take
-                .unwrap_or(if self.open { 10 } else { 50 })
+                .unwrap_or(10)
                 .into(),
         )
     }
