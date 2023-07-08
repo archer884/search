@@ -10,11 +10,11 @@ strip = "symbols"
 
 [dependencies]
 anyhow = "1.0.71"
-clap = { version = "3.2.25", features = ["derive"] }
-directories = "4.0.1"
-open = "3.2.0"
-scraper = "0.13.0"
+clap = { version = "4.3.11", features = ["derive"] }
+directories = "5.0.1"
+open = "5.0.0"
+scraper = "0.17.1"
 serde = { version = "1.0.167", features = ["derive"] }
 serde_json = "1.0.100"
-tantivy = "0.18.1"
+tantivy = "0.20.2"
 walkdir = "2.3.3"
