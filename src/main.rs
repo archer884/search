@@ -326,11 +326,11 @@ fn list_indexes() -> anyhow::Result<()> {
     let storage_path = get_storage_path()?;
     let libraries = Libraries::from_path(&storage_path)?;
 
-    let mut names: Vec<_> = libraries.mapping.values().collect();
-    names.sort();
+    let mut libraries: Vec<_> = libraries.mapping.iter().collect();
+    libraries.sort_unstable_by(|a, b| a.1.cmp(&b.1));
 
-    for name in names {
-        println!("{name}");
+    for (path, name) in libraries {
+        println!("{name}\n  {}", path.display());
     }
 
     Ok(())
