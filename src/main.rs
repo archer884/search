@@ -63,13 +63,12 @@ impl Args {
     }
 
     fn skip_take(&self) -> (Skip, Take) {
-        (
-            self.skip_take.skip.unwrap_or_default().into(),
-            self.skip_take
-                .take
-                .unwrap_or(10)
-                .into(),
-        )
+        let skip = match self.skip_take.page {
+            Some(page) => self.skip_take.take.map(|take| take * page).unwrap_or(page),
+            None => self.skip_take.skip.unwrap_or_default(),
+        };
+
+        (skip.into(), self.skip_take.take.unwrap_or(10).into())
     }
 }
 
@@ -191,6 +190,9 @@ struct SkipTake {
 
     #[clap(short, long)]
     take: Option<usize>,
+
+    #[clap(short, long)]
+    page: Option<usize>,
 }
 
 struct SearchFields {
