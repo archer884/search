@@ -13,6 +13,7 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
+use percent_encoding::{AsciiSet, CONTROLS};
 use scraper::Html;
 use serde::{Deserialize, Serialize};
 use tantivy::{
@@ -20,8 +21,8 @@ use tantivy::{
     directory::MmapDirectory,
     doc,
     query::QueryParser,
-    schema::{self, Field, Schema},
-    Index,
+    schema::{self, Field, Schema, Value},
+    Index, TantivyDocument,
 };
 
 #[derive(Clone, Debug, Parser)]
@@ -64,7 +65,10 @@ impl Args {
 
     fn skip_take(&self) -> (Skip, Take) {
         let skip = match self.skip_take.page {
-            Some(page) => self.skip_take.take.map(|take| take * page).unwrap_or(page),
+            Some(page) => {
+                let take = self.skip_take.take.unwrap_or(10);
+                page * take
+            }
             None => self.skip_take.skip.unwrap_or_default(),
         };
 
@@ -277,10 +281,10 @@ fn run(args: &Args) -> anyhow::Result<()> {
     let texts = searcher.search(&query, &TopDocs::with_limit(*take).and_offset(*skip))?;
     let texts = texts.into_iter().filter_map(|(_, doc_id)| {
         searcher
-            .doc(doc_id)
+            .doc::<TantivyDocument>(doc_id)
             .ok()?
             .get_first(fields.path)?
-            .as_text()
+            .as_str()
             .map(ToOwned::to_owned)
     });
 
@@ -295,7 +299,19 @@ fn run(args: &Args) -> anyhow::Result<()> {
             open::that(path)?;
         }
     } else {
+        const ENCODING_SET: &AsciiSet = &CONTROLS
+            .add(b' ')
+            .add(b'<')
+            .add(b'>')
+            .add(b'!')
+            .add(b'?')
+            .add(b'\'')
+            .add(b'"');
+
         for path in texts {
+            // println!("{path}");
+            let path = format!("file://{path}");
+            let path = percent_encoding::percent_encode(path.as_bytes(), ENCODING_SET);
             println!("{path}");
         }
     }
@@ -318,10 +334,7 @@ fn update_index() -> anyhow::Result<()> {
     let root = env::current_dir()?;
     let name = libraries.get_index_name(&root)?;
 
-    build_index(&UpdateCmd {
-        root: &root,
-        name: &name,
-    })
+    build_index(&UpdateCmd { root: &root, name })
 }
 
 fn list_indexes() -> anyhow::Result<()> {
@@ -329,7 +342,7 @@ fn list_indexes() -> anyhow::Result<()> {
     let libraries = Libraries::from_path(&storage_path)?;
 
     let mut libraries: Vec<_> = libraries.mapping.iter().collect();
-    libraries.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+    libraries.sort_unstable_by(|a, b| a.1.cmp(b.1));
 
     for (path, name) in libraries {
         println!("{name}\n  {}", path.display());
@@ -354,7 +367,7 @@ fn build_index(args: &impl IndexArgs) -> anyhow::Result<()> {
     // not a library with the given name is already registered. If so, we'll either return here
     // or continue depending on whether or not the force flag has been set.
 
-    update_registry(storage_path, args, &*root)?;
+    update_registry(storage_path, args, &root)?;
 
     Ok(())
 }
@@ -367,7 +380,7 @@ fn update_registry(
     let registry = storage_path.join("libraries.json");
     let libraries = Libraries::from_path(&storage_path)?;
 
-    if libraries.mapping.values().any(|val| val == &args.name()) && !args.force() {
+    if libraries.mapping.values().any(|val| val == args.name()) && !args.force() {
         let name = args.name();
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -379,7 +392,7 @@ fn update_registry(
     let mut mapping: HashMap<_, _> = libraries
         .mapping
         .into_iter()
-        .filter(|(_key, value)| value != &args.name())
+        .filter(|(_key, value)| value != args.name())
         .collect();
     mapping.insert(root.to_owned(), args.name().to_owned());
 
@@ -414,7 +427,7 @@ fn initialize(
         let stored_path = format!("{}", path.display());
 
         let text = if is_html(&path) {
-            let fragment = Html::parse_fragment(&*text);
+            let fragment = Html::parse_fragment(&text);
 
             let mut buf = String::with_capacity(text.len());
             for s in fragment.root_element().text() {
@@ -491,12 +504,8 @@ fn get_data_path(args: &impl IndexArgs, storage: &Path) -> io::Result<PathBuf> {
 }
 
 fn get_storage_path() -> io::Result<PathBuf> {
-    let dirs = ProjectDirs::from("org", "Hack Commons", "Search-App").ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            "unable to initialize project directory",
-        )
-    })?;
+    let dirs = ProjectDirs::from("org", "Hack Commons", "Search-App")
+        .ok_or_else(|| io::Error::other("unable to initialize project directory"))?;
 
     Ok(dirs.data_dir().into())
 }

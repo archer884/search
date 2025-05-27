@@ -1,6 +1,6 @@
 [package]
 name = "search"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -9,12 +9,13 @@ edition = "2021"
 strip = "symbols"
 
 [dependencies]
-anyhow = "1.0.71"
-clap = { version = "4.3.11", features = ["derive"] }
-directories = "5.0.1"
-open = "5.0.0"
-scraper = "0.17.1"
-serde = { version = "1.0.167", features = ["derive"] }
-serde_json = "1.0.100"
-tantivy = "0.20.2"
-walkdir = "2.3.3"
+anyhow = "1.0.98"
+clap = { version = "4.5.38", features = ["derive"] }
+directories = "6.0.0"
+open = "5.3.2"
+percent-encoding = "2.3.1"
+scraper = "0.23.1"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+tantivy = "0.24.1"
+walkdir = "2.5.0"
